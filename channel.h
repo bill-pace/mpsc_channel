@@ -8,162 +8,165 @@
 #include <mutex>
 #include <utility>
 
-#include <iostream>
-
+template<typename T> class Channel;
 template<typename T> class Receiver;
 template<typename T> class Transmitter;
 template<typename T> std::pair<Transmitter<T>, Receiver<T>> open_channel();
 
-namespace {
-    template<typename T> class Channel;
 
-    // A ChannelNode is a single piece of data in the singly linked list.
-    // It has no public interface since instances should be managed entirely
-    // through the Channel instance that owns them.
-    template<typename T>
-    struct ChannelNode {
-        ChannelNode() = delete;
+// A ChannelNode is a single piece of data in the singly linked list.
+// It has no public interface since instances should be managed entirely
+// through the Channel instance that owns them.
+template<typename T>
+struct ChannelNode {
+    friend Channel<T>;
 
-        ChannelNode(const ChannelNode &) = delete;
+    ChannelNode() = delete;
 
-        ChannelNode& operator=(const ChannelNode &) = delete;
+    ChannelNode(const ChannelNode &) = delete;
 
-        ChannelNode(ChannelNode &&) = delete;
+    ChannelNode& operator=(const ChannelNode &) = delete;
 
-        ChannelNode& operator=(ChannelNode &&) = delete;
+    ChannelNode(ChannelNode &&) = delete;
 
-        // make a new ChannelNode by taking ownership of a T instance
-        explicit ChannelNode(T && data) : data(data), next(nullptr) {}
+    ChannelNode& operator=(ChannelNode &&) = delete;
 
-        T data;
-        ChannelNode* next;
-    };
+private:
+    // make a new ChannelNode by taking ownership of a T instance
+    explicit ChannelNode(T && data) : data(data), next(nullptr) {}
 
-    // A Channel is a FIFO queue with a queue_mutex lock. It has no public interface
-    // as it should be managed entirely through the transmitter and receiver
-    // instances that share ownership of it.
-    // Transmitters allow for pushing new data into their corresponding channels,
-    // while receivers allow for popping new data out for use elsewhere. The
-    // queue_mutex locks used in a channel allow for it to ensure thread-safe
-    // operations in both use cases, as well as supporting the dual owners in
-    // proper cleanup.
-    // A Channel owns the data contained within its nodes, and so both takes
-    // ownership of anything pushed to it and relinquishes ownership of
-    // anything popped from it. If the channel is not empty when deleted,
-    // everything still in the channel will be destructed.
-    template<typename T>
-    class Channel {
-    public:
-        Channel(const Channel&) = delete;
+    T data;
+    ChannelNode* next;
+};
 
-        Channel& operator=(const Channel&) = delete;
+// A Channel is a FIFO queue with a queue_mutex lock. It has no public interface
+// as it should be managed entirely through the transmitter and receiver
+// instances that share ownership of it.
+// Transmitters allow for pushing new data into their corresponding channels,
+// while receivers allow for popping new data out for use elsewhere. The
+// queue_mutex locks used in a channel allow for it to ensure thread-safe
+// operations in both use cases, as well as supporting the dual owners in
+// proper cleanup.
+// A Channel owns the data contained within its nodes, and so both takes
+// ownership of anything pushed to it and relinquishes ownership of
+// anything popped from it. If the channel is not empty when deleted,
+// everything still in the channel will be destructed.
+template<typename T>
+class Channel {
+    friend class Transmitter<T>;
+    friend class Receiver<T>;
+    friend std::pair<Transmitter<T>, Receiver<T>> open_channel<T>();
 
-        Channel(Channel&&) = delete;
+public:
+    Channel(const Channel&) = delete;
 
-        Channel& operator=(Channel&&) = delete;
+    Channel& operator=(const Channel&) = delete;
 
-        // channels are empty and open by default
-        Channel() :
-                first(nullptr),
-                last(nullptr),
-                queue_mutex(),
-                open(true),
-                tx_count_mutex(),
-                tx_count(0)
-        {}
+    Channel(Channel&&) = delete;
 
-        // destroy every owned node in the queue
-        // only call from the close() method to ensure locked
-        ~Channel() {
-            ChannelNode<T> * next = first;
-            while (next) {
-                ChannelNode<T> * following = next->next;
-                delete next;
-                next = following;
-            }
+    Channel& operator=(Channel&&) = delete;
+
+private:
+    // channels are empty and open by default
+    Channel() :
+            queue_mutex(),
+            tx_count_mutex(),
+            first(nullptr),
+            last(nullptr),
+            tx_count(0),
+            open(true)
+    {}
+
+    // destroy every owned node in the queue
+    // only call from the close() method to ensure locked
+    ~Channel() {
+        ChannelNode<T> * next = first;
+        while (next) {
+            ChannelNode<T> * following = next->next;
+            delete next;
+            next = following;
         }
+    }
 
-        // add a new value to the queue, taking ownership of it
-        void push(T&& new_value) {
-            auto * new_node = new ChannelNode<T> { std::move(new_value) };
+    // add a new value to the queue, taking ownership of it
+    void push(T&& new_value) {
+        auto * new_node = new ChannelNode<T> { std::move(new_value) };
+        const std::lock_guard<std::mutex> lock(queue_mutex);
+        if (last) {
+            last->next = new_node;
+        } else {
+            first = new_node;
+        }
+        last = new_node;
+    }
+
+    // attempt to remove a value from the queue
+    // if the queue is empty, returns false without changing the output parameter
+    // otherwise, moves the item from the first node into the output parameter and returns true
+    bool try_pop(T& out, bool& is_open) {
+        bool success = false;
+        ChannelNode<T> * node = nullptr;
+        {
             const std::lock_guard<std::mutex> lock(queue_mutex);
-            if (last) {
-                last->next = new_node;
-            } else {
-                first = new_node;
-            }
-            last = new_node;
-        }
-
-        // attempt to remove a value from the queue
-        // if the queue is empty, returns false without changing the output parameter
-        // otherwise, moves the item from the first node into the output parameter and returns true
-        bool try_pop(T& out, bool& is_open) {
-            bool success = false;
-            ChannelNode<T> * node = nullptr;
-            {
-                const std::lock_guard<std::mutex> lock(queue_mutex);
-                if (first != nullptr) {
-                    node = first;
-                    first = first->next;
-                    if (first == nullptr) {
-                        last = nullptr;
-                    }
+            if (first != nullptr) {
+                node = first;
+                first = first->next;
+                if (first == nullptr) {
+                    last = nullptr;
                 }
-                is_open = open;
             }
-            if (node) {
-                out = std::move(node->data);
-                delete node;
-                success = true;
-            }
-            return success;
+            is_open = open;
         }
-
-        // close the channel, indicating that either the transmitter(s) or
-        // receiver has been destroyed
-        // once both ends have been cleaned up, the channel will self-destruct
-        // from here
-        bool close() {
-            const std::lock_guard<std::mutex> lock(queue_mutex);
-            bool should_delete = false;
-            if (open) {
-                open = false;
-            } else {
-                should_delete = true;
-            }
-            return should_delete;
+        if (node) {
+            out = std::move(node->data);
+            delete node;
+            success = true;
         }
+        return success;
+    }
 
-        // increment the count of transmitters
-        void add_transmitter() {
+    // close the channel, indicating that either the transmitter(s) or
+    // receiver has been destroyed
+    // once both ends have been cleaned up, the channel will self-destruct
+    // from here
+    bool close() {
+        const std::lock_guard<std::mutex> lock(queue_mutex);
+        bool should_delete = false;
+        if (open) {
+            open = false;
+        } else {
+            should_delete = true;
+        }
+        return should_delete;
+    }
+
+    // increment the count of transmitters
+    void add_transmitter() {
+        const std::lock_guard<std::mutex> lock(tx_count_mutex);
+        ++tx_count;
+    }
+
+    // decrement the count of transmitters
+    // if zero after decrement, close the channel
+    bool remove_transmitter() {
+        bool should_delete = false;
+        {
             const std::lock_guard<std::mutex> lock(tx_count_mutex);
-            ++tx_count;
-        }
-
-        // decrement the count of transmitters
-        // if zero after decrement, close the channel
-        bool remove_transmitter() {
-            bool should_delete = false;
-            {
-                const std::lock_guard<std::mutex> lock(tx_count_mutex);
-                --tx_count;
-                if (tx_count == 0) {
-                    should_delete = close();
-                }
+            --tx_count;
+            if (tx_count == 0) {
+                should_delete = close();
             }
-            return should_delete;
         }
+        return should_delete;
+    }
 
-    private:
-        std::mutex queue_mutex;
-        std::mutex tx_count_mutex;
-        ChannelNode<T> * first;
-        ChannelNode<T> * last;
-        size_t tx_count;
-        bool open;
-    };
-}
+    std::mutex queue_mutex;
+    std::mutex tx_count_mutex;
+    ChannelNode<T> * first;
+    ChannelNode<T> * last;
+    size_t tx_count;
+    bool open;
+};
 
 // A Transmitter provides the mechanism for placing data into a channel.
 // Transmitters can be created through the open_channel() function,
