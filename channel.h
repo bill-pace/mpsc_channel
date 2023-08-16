@@ -186,11 +186,7 @@ public:
 
     Transmitter& operator=(const Transmitter & other) {
         if (&other == this) return *this;
-        if (channel) {
-            if (channel->remove_transmitter()) {
-                delete channel;
-            }
-        }
+        close();
         this->channel = other.channel;
         channel->add_transmitter();
         return *this;
@@ -202,11 +198,7 @@ public:
 
     Transmitter& operator=(Transmitter && other) noexcept {
         if (&other == this) return *this;
-        if (channel) {
-            if (channel->remove_transmitter()) {
-                delete channel;
-            }
-        }
+        close();
         this->channel = other.channel;
         other.channel = nullptr;
         return *this;
@@ -214,11 +206,7 @@ public:
 
     // decrement count of transmitters to channel
     ~Transmitter() {
-        if (channel) {
-            if (channel->remove_transmitter()) {
-                delete channel;
-            }
-        }
+        close();
     }
 
     // take ownership of a value and emplace it at the back of the queue
@@ -229,6 +217,13 @@ public:
     // take ownership of a value and emplace it at the back of the queue
     void send(T && data) {
         channel->push(std::move(data));
+    }
+
+    void close() {
+        if(channel && channel->remove_transmitter()) {
+            delete channel;
+        }
+        channel = nullptr;
     }
 
 private:

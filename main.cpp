@@ -13,19 +13,18 @@ int main() {
     auto tx_rx = open_channel<std::string>();
     thread receiver_thread { receive_task, std::move(tx_rx.second) };
 
-    {
-        auto tx = std::move(tx_rx.first);
-        thread transmitter_threads[10];
-        for (size_t i = 0; i < 10; ++i) {
-            stringstream name{};
-            name << "Thread " << i;
-            transmitter_threads[i] = thread(send_task, name.str(), tx);
-        }
-
-        for (auto &thread: transmitter_threads) {
-            thread.join();
-        }
+    thread transmitter_threads[10];
+    for (size_t i = 0; i < 10; ++i) {
+        stringstream name{};
+        name << "Thread " << i;
+        transmitter_threads[i] = thread(send_task, name.str(), tx_rx.first);
     }
+
+    for (auto &thread: transmitter_threads) {
+        thread.join();
+    }
+    tx_rx.first.close();
+
     receiver_thread.join();
 }
 
