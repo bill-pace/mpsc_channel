@@ -4,11 +4,10 @@
 #include <thread>
 #include <sstream>
 
-using namespace mpsc;
 using namespace std;
 
-void send_task(const std::string &, mpsc::Transmitter<std::string>);
-void receive_task(mpsc::Receiver<std::string> &&);
+void send_task(const std::string &, Transmitter<std::string>);
+void receive_task(Receiver<std::string> &&);
 
 int main() {
     auto tx_rx = open_channel<std::string>();
@@ -30,12 +29,12 @@ int main() {
     receiver_thread.join();
 }
 
-void send_task(const std::string & name, mpsc::Transmitter<std::string> tx) {
+void send_task(const std::string & name, Transmitter<std::string> tx) {
     string message { name + " says hello!" };
     tx.send(message);
 }
 
-void receive_task(mpsc::Receiver<std::string> && rx) {
+void receive_task(Receiver<std::string> && rx) {
     bool channel_open { true };
     while (channel_open) {
         string msg {};
