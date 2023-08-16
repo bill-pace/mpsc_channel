@@ -261,25 +261,14 @@ public:
     // close current Channel, if any,
     // then take partial ownership of the other Receiver's Channel
     Receiver& operator=(Receiver && other) noexcept {
-        if (channel) {
-            bool should_delete = channel->close();
-            if (should_delete) {
-                delete channel;
-            }
-        }
+        close();
         this->channel = other.channel;
         other.channel = nullptr;
     }
 
     // close the current Channel, if any
     ~Receiver() {
-        if (channel) {
-            bool should_delete = channel->close();
-            if (should_delete) {
-                delete channel;
-            }
-            channel = nullptr;
-        }
+        close();
     }
 
     // attempt to pop an item off the front of the Channel's queue
@@ -287,6 +276,13 @@ public:
     // otherwise, returns true after moving data into the out parameter
     bool try_receive(T& out, bool& is_open) {
         return channel->try_pop(out, is_open);
+    }
+
+    void close() {
+        if (channel && channel->close()) {
+            delete channel;
+        }
+        channel = nullptr;
     }
 
 private:
