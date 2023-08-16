@@ -156,12 +156,12 @@ namespace {
         }
 
     private:
+        std::mutex queue_mutex;
+        std::mutex tx_count_mutex;
         ChannelNode<T> * first;
         ChannelNode<T> * last;
-        std::mutex queue_mutex;
-        bool open;
-        std::mutex tx_count_mutex;
         size_t tx_count;
+        bool open;
     };
 }
 
