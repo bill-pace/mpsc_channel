@@ -10,7 +10,7 @@ int main() {
     const size_t length { 100000 };
     auto * received = new size_t[length];
     for (size_t idx = 0; idx < length; ++idx) {
-        received[idx] = false;
+        received[idx] = 0;
     }
 
     auto tx_rx = open_channel<size_t>();
