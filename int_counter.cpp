@@ -1,13 +1,43 @@
 #include "channel.h"
 
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 void send(Transmitter<size_t>, size_t, size_t);
 void receive(Receiver<size_t> &&, size_t *);
 
-int main() {
-    const size_t length { 100000 };
+int main(int argc, char ** argv) {
+    if (argc != 3) return 1;
+
+    size_t length;
+    std::string arg = argv[1];
+    try {
+        std::size_t pos;
+        length = std::stoi(arg, &pos);
+        if (pos < arg.size()) {
+            std::cerr << "Trailing characters after number: " << arg << '\n';
+        }
+    } catch (std::invalid_argument const &ex) {
+        std::cerr << "Invalid number: " << arg << '\n';
+    } catch (std::out_of_range const &ex) {
+        std::cerr << "Number out of range: " << arg << '\n';
+    }
+
+    size_t num_threads;
+    arg = argv[2];
+    try {
+        std::size_t pos;
+        num_threads = std::stoi(arg, &pos);
+        if (pos < arg.size()) {
+            std::cerr << "Trailing characters after number: " << arg << '\n';
+        }
+    } catch (std::invalid_argument const &ex) {
+        std::cerr << "Invalid number: " << arg << '\n';
+    } catch (std::out_of_range const &ex) {
+        std::cerr << "Number out of range: " << arg << '\n';
+    }
+
     auto * received = new size_t[length];
     for (size_t idx = 0; idx < length; ++idx) {
         received[idx] = 0;
@@ -16,7 +46,6 @@ int main() {
     auto tx_rx = open_channel<size_t>();
     auto rx_thread = std::thread { receive, std::move(tx_rx.second), received };
 
-    const size_t num_threads = 10;
     const size_t increment = length / num_threads;
     std::thread tx_threads[num_threads];
     for (size_t thread_num = 0; thread_num < num_threads; ++thread_num) {
