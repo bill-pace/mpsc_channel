@@ -53,8 +53,8 @@ private:
 // everything still in the channel will be destructed.
 template<typename T>
 class Channel {
-    friend class Transmitter<T>;
-    friend class Receiver<T>;
+    friend Transmitter<T>;
+    friend Receiver<T>;
     friend std::pair<Transmitter<T>, Receiver<T>> open_channel<T>();
 
 public:
