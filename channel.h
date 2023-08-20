@@ -457,13 +457,26 @@ private:
     Channel<T> * channel;
 };
 
-// A Receiver provides the mechanism for popping data off of a Channel's
-// FIFO queue. Complementary to the Transmitter, a Receiver relinquishes
-// ownership of the received data to the caller, thus leaving the caller
-// responsible for managing its lifetime.
-// As this type of channel is single-consumer, the Receiver cannot be
-// copied or cloned. A Receiver can be constructed via the open_channel()
-// method or moved into another Receiver, however.
+/**
+ * @brief A class for removing items from a Channel.
+ *
+ * Receivers provide the mechanism for removing items from a Channel's
+ * queue. As this is a single-consumer Channel, Receivers may be moved
+ * or created through the `open_channel<T>()` factory function, but
+ * they may not be copied.@n@n
+ *
+ * When moved, destroyed, or directed to close, a Receiver will first
+ * close its target Channel, or destroy the Channel if it has already
+ * been closed from the Transmitter end.@n@n
+ *
+ * The `try_receive()` method checks whether the target Channel has
+ * anything in its queue, retrieving the first item if so, and will
+ * also indicate whether the Channel is still open. The caller may
+ * choose to use this status as an indicator of when to stop trying
+ * to do work with a Receiver.
+ *
+ * @tparam T the type of item that can be received
+ */
 template<typename T>
 class Receiver {
     friend std::pair<Transmitter<T>, Receiver<T>> open_channel<T>();
@@ -475,31 +488,74 @@ public:
 
     Receiver& operator=(const Receiver &) = delete;
 
-    // take partial ownership of a Channel from another Receiver
+    /**
+     * @brief Move construct a Receiver.
+     *
+     * Takes partial ownership of the `other` Receiver's target
+     * Channel instance and then closes the `other` Receiver.
+     *
+     * @param other The Receiver to move from
+     */
     Receiver(Receiver && other) noexcept : channel(other.channel) {
         other.channel = nullptr;
     }
 
-    // close current Channel, if any,
-    // then take partial ownership of the other Receiver's Channel
+    /**
+     * @brief Move assign a Receiver.
+     *
+     * Instructs the currently targeted Channel to close, or
+     * deletes it if it is already closed, then moves from
+     * the `other` Receiver.
+     *
+     * @param other The Receiver to move from
+     * @return this
+     */
     Receiver& operator=(Receiver && other) noexcept {
         close();
         this->channel = other.channel;
         other.channel = nullptr;
+        return *this;
     }
 
-    // close the current Channel, if any
+    /**
+     * @brief Destroy a Receiver.
+     *
+     * First instructs the target Channel, if any, to close,
+     * and if it is already closed, deletes it.
+     */
     ~Receiver() {
         close();
     }
 
-    // attempt to pop an item off the front of the Channel's queue
-    // if the queue is empty, returns false with no change to the out parameter
-    // otherwise, returns true after moving data into the out parameter
+    /**
+     * @brief Attempt to retrieve an item from the target Channel.
+     *
+     * Attempts to move data from the target Channel into the provided
+     * `out` parameter. The return value indicates whether `out` was
+     * actually modified, as `try_receive()` cannot retrieve an item
+     * from an empty queue. This method also indicates whether the
+     * Channel still has at least one active Transmitter, as an
+     * empty Channel with no Transmitters will never contain items
+     * again and may indicate that the caller should stop trying
+     * to retrieve items from this Receiver.@n@n
+     *
+     * Will segfault if the Receiver has been closed, i.e. by moving
+     * out of it or by directly invoking its `close()` method.
+     *
+     * @param out Output parameter to contain the popped item
+     * @param is_open Output parameter indicating whether the target Channel is open
+     * @return whether `out` was modified
+     */
     bool try_receive(T& out, bool& is_open) {
         return channel->try_pop(out, is_open);
     }
 
+    /**
+     * @brief Disconnect from the target Channel
+     *
+     * Instructs the target Channel, if any, to close. If it is
+     * already closed, deletes the Channel.
+     */
     void close() {
         if (channel && channel->close()) {
             delete channel;
@@ -508,18 +564,31 @@ public:
     }
 
 private:
-    // constructed following a Channel in the open_channel() method
-    // note that the pointer may be null if and only if another
-    // Receiver instance is moved into this one before attempting to receive
+    /**
+     * @brief Construct a new Receiver for a Channel
+     *
+     * Creates a new Receiver that points to the specified Channel.
+     * Should only be called from the `open_channel<T>()` factory
+     * function, which will supply a non-null pointer.
+     *
+     * @param channel Pointer to the target Channel
+     */
     explicit Receiver(Channel<T> * channel) : channel(channel) {}
 
     Channel<T> * channel;
 };
 
-// Opens a new Channel for sending data of a specified type between threads.
-// Returns a Transmitter and a Receiver that share ownership of the opened
-// Channel, and ensure it is cleaned up when both sides are closed and only
-// then.
+/**
+ * @brief Opens a new Channel.
+ *
+ * Creates a new Channel on the heap for sending data across threads, as
+ * well as a Transmitter and a Receiver that both target the Channel.
+ * The Transmitter and Receiver share ownership of the Channel and will
+ * ensure it is properly cleaned up once both sides have been destroyed.
+ *
+ * @tparam T type of data to be transmitted through the opened Channel; must support move semantics
+ * @return a `std::pair` of Transmitter and Receiver instances that target the opened Channel
+ */
 template<typename T>
 std::pair<Transmitter<T>, Receiver<T>> open_channel() {
     auto * channel = new Channel<T> {};
