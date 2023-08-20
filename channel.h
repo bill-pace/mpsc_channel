@@ -13,10 +13,15 @@ template<typename T> class Receiver;
 template<typename T> class Transmitter;
 template<typename T> std::pair<Transmitter<T>, Receiver<T>> open_channel();
 
-
-// A ChannelNode is a single piece of data in the singly linked list.
-// It has no public interface since instances should be managed entirely
-// through the Channel instance that owns them.
+/**
+ * An item within a Channel's queue.
+ *
+ * A ChannelNode is a single piece of data in a singly linked list.
+ * It has no public interface since instances should be managed entirely
+ * through the Channel instance that owns them.
+ *
+ * @tparam T the type of data transferred through the owning Channel
+ */
 template<typename T>
 struct ChannelNode {
     friend Channel<T>;
@@ -32,25 +37,51 @@ struct ChannelNode {
     ChannelNode& operator=(ChannelNode &&) = delete;
 
 private:
-    // make a new ChannelNode by taking ownership of a T instance
+    /**
+     * Construct a ChannelNode.
+     *
+     * Takes ownership of the `data` parameter.
+     *
+     * @param data An instance of the template type.
+     */
     explicit ChannelNode(T && data) : data(data), next(nullptr) {}
 
     T data;
     ChannelNode* next;
 };
 
-// A Channel is a FIFO queue with a queue_mutex lock. It has no public interface
-// as it should be managed entirely through the transmitter and receiver
-// instances that share ownership of it.
-// Transmitters allow for pushing new data into their corresponding channels,
-// while receivers allow for popping new data out for use elsewhere. The
-// queue_mutex locks used in a channel allow for it to ensure thread-safe
-// operations in both use cases, as well as supporting the dual owners in
-// proper cleanup.
-// A Channel owns the data contained within its nodes, and so both takes
-// ownership of anything pushed to it and relinquishes ownership of
-// anything popped from it. If the channel is not empty when deleted,
-// everything still in the channel will be destructed.
+/**
+ * A FIFO queue for transferring data between threads.
+ *
+ * A Channel enables the transfer of data from one or more threads
+ * to another through the use of the Transmitter(s) and Receiver that
+ * connect to the Channel. The Receiver will remove items from the
+ * Channel in the same order that Transmitters add them, though if
+ * multiple Transmitters point to the same Channel there will be a
+ * (benign) race condition on which one adds its item first.
+ *
+ * Thread safety is achieved through locking either of two mutexes,
+ * depending on the operation being performed. One mutex protects
+ * the queue and is locked for pushing and popping; the other
+ * protects the count of live Transmitters and is locked when they
+ * are created, destroyed, copied, or moved.
+ *
+ * Channels take ownership of items pushed into them and relinquish
+ * ownership of items popped out, and so cleanup should generally
+ * happen on the side of the Receiver. If a Channel is nonempty
+ * when its destructor is called, it will clean up all of its
+ * ChannelNodes and, therefore, the data that was transmitted but
+ * never received.
+ *
+ * Channels have no public interface as they should be entirely
+ * managed through the Transmitter(s) and Receiver that point to
+ * them. Once one end of the Channel has been closed (e.g. by
+ * moving or destroying all Transmitter instances that point to it)
+ * the Channel will be marked as closed, and when the other end
+ * is closed the Channel's destructor will be called.
+ *
+ * @tparam T the type of data transferred through the Channel
+ */
 template<typename T>
 class Channel {
     friend Transmitter<T>;
@@ -67,7 +98,14 @@ public:
     Channel& operator=(Channel&&) = delete;
 
 private:
-    // channels are empty and open by default
+    /**
+     * Create a new Channel.
+     *
+     * By default, a Channel is open, empty, and unlocked. This
+     * constructor should only be called from the `open_channel<T>()`
+     * function, which will assign a Transmitter and a Receiver to
+     * the created Channel and pass those back to the caller.
+     */
     Channel() :
             queue_mutex(),
             tx_count_mutex(),
@@ -77,8 +115,13 @@ private:
             open(true)
     {}
 
-    // destroy every owned node in the queue
-    // only call from the close() method to ensure locked
+    /**
+     * Destroy a Channel and its owned ChannelNodes.
+     *
+     * Only call this method from a Transmitter or Receiver
+     * that is being closed, after it checks whether the
+     * other end of the Channel has already been closed.
+     */
     ~Channel() {
         ChannelNode<T> * next = first;
         while (next) {
@@ -88,7 +131,28 @@ private:
         }
     }
 
-    // add a new value to the queue, taking ownership of it
+    /**
+     * Add an item to the queue.
+     *
+     * Prepare an item of the Channel's template type to be moved
+     * across threads. Take ownership of the item to ensure that
+     * other threads cannot corrupt the data before the Receiver
+     * claims it.
+     *
+     * Locks the `queue_mutex` after constructing a new ChannelNode
+     * to ensure that the queue remains in a valid state without
+     * forcing other threads to wait for heap allocation.
+     *
+     * Pushing to a closed queue effectively throws the data away,
+     * as it will be moved into a ChannelNode instance that can
+     * never be retrieved.
+     *
+     * Note that the queue's capacity is determined by the heap
+     * memory available, and so pushing can only fail based on
+     * queue length if memory runs out.
+     *
+     * @param new_value The data to enqueue
+     */
     void push(T&& new_value) {
         auto * new_node = new ChannelNode<T> { std::move(new_value) };
         const std::lock_guard<std::mutex> lock(queue_mutex);
@@ -100,9 +164,26 @@ private:
         last = new_node;
     }
 
-    // attempt to remove a value from the queue
-    // if the queue is empty, returns false without changing the output parameter
-    // otherwise, moves the item from the first node into the output parameter and returns true
+    /**
+     * Remove an item from the queue.
+     *
+     * Locks the `queue_mutex` to check whether the queue is currently empty and
+     * whether it is currently open. If the queue is empty, `try_pop` will return
+     * false and make no change to the output parameter `out`. If the queue is
+     * not empty, `try_pop` will remove the first ChannelNode, move its data into
+     * the output parameter `out`, and return true. In both cases, the output
+     * parameter `is_open` will be set to the current value of the Channel's
+     * member data `open`.
+     *
+     * The `queue_mutex` remains locked only long enough to modify the queue and
+     * check the value of the `open` data member, ensuring the queue remains in
+     * a valid state without forcing other threads to wait on move assignment or
+     * heap deallocation.
+     *
+     * @param out Output parameter to hold data moved out of the queue
+     * @param is_open Output parameter indicating whether the Channel is still open
+     * @return whether the parameter `out` was modified
+     */
     bool try_pop(T& out, bool& is_open) {
         bool success = false;
         ChannelNode<T> * node = nullptr;
@@ -125,10 +206,21 @@ private:
         return success;
     }
 
-    // close the channel, indicating that either the transmitter(s) or
-    // receiver has been destroyed
-    // once both ends have been cleaned up, the channel will self-destruct
-    // from here
+    /**
+     * Direct the Channel to close.
+     *
+     * Locks the `queue_mutex` to check whether the Channel is currently
+     * open. If so, marks the Channel as closed by setting `open` to false,
+     * then returns false to indicate that one half of the Channel still
+     * exists and the caller should not invalidate it by deleting the
+     * Channel.
+     *
+     * Otherwise, returns true to indicate to the caller that it is the
+     * last owner of the Channel and that the Channel should now be
+     * deleted to ensure it isn't leaked.
+     *
+     * @return whether the caller should invoke the Channel's destructor
+     */
     bool close() {
         const std::lock_guard<std::mutex> lock(queue_mutex);
         bool should_delete = false;
@@ -140,14 +232,37 @@ private:
         return should_delete;
     }
 
+    /**
+     * Increments the Transmitter count.
+     *
+     * Locks the `tx_count_mutex` and then increments `tx_count`
+     * to track the assignment of another Transmitter to this
+     * Channel.
+     */
     // increment the count of transmitters
     void add_transmitter() {
         const std::lock_guard<std::mutex> lock(tx_count_mutex);
         ++tx_count;
     }
 
-    // decrement the count of transmitters
-    // if zero after decrement, close the channel
+    /**
+     * Decrements the Transmitter count.
+     *
+     * Locks the `tx_count_mutex` and then decrements `tx_count`
+     * to track the removal of a Transmitter from this Channel.
+     *
+     * If the count reaches zero, then the caller is the last
+     * Transmitter to this Channel and no more can be created.
+     * The Channel then calls its own `close` method and passes
+     * the result to its caller to indicate whether the
+     * destructor should also be invoked.
+     *
+     * If the count remains above zero, then other Transmitters
+     * to this Channel are still live and it should be neither
+     * closed nor destroyed.
+     *
+     * @return whether the destructor should be invoked next
+     */
     bool remove_transmitter() {
         bool should_delete = false;
         {
