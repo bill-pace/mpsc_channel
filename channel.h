@@ -1,10 +1,7 @@
-//
-// Created by bill on 8/12/23.
-//
-
 #ifndef MPSCCHANNEL_CHANNEL_H
 #define MPSCCHANNEL_CHANNEL_H
 
+#include <condition_variable>
 #include <mutex>
 #include <utility>
 
@@ -107,6 +104,7 @@ private:
      * the created Channel and pass those back to the caller.
      */
     Channel() :
+            cv(),
             queue_mutex(),
             tx_count_mutex(),
             first(nullptr),
@@ -162,10 +160,11 @@ private:
             first = new_node;
         }
         last = new_node;
+        cv.notify_one();
     }
 
     /**
-     * @brief Remove an item from the queue.
+     * @brief Attempt to move an item from the queue.
      *
      * Locks the `queue_mutex` to check whether the queue is currently empty and
      * whether it is currently open. If the queue is empty, `try_pop` will return
@@ -189,6 +188,42 @@ private:
         ChannelNode<T> * node = nullptr;
         {
             const std::lock_guard<std::mutex> lock(queue_mutex);
+            if (first != nullptr) {
+                node = first;
+                first = first->next;
+                if (first == nullptr) {
+                    last = nullptr;
+                }
+            }
+            is_open = open;
+        }
+        if (node) {
+            out = std::move(node->data);
+            delete node;
+            success = true;
+        }
+        return success;
+    }
+
+    /**
+     * @brief Attempt to wait for an item on the queue.
+     *
+     * Locks the `queue_mutex` to check whether the queue is currently empty
+     * and open. If so, waits for notification via the `cv` condition variable
+     * that either the queue is nonempty or the Channel is closed. Once that
+     * condition is satisfied, attempts to remove an item from the queue as in
+     * `try_pop()`.
+     *
+     * @param out Output parameter to hold data moved out of the queue
+     * @param is_open Output parameter indicating whether the Channel is still open
+     * @return whether the parameter `out` was modified
+     */
+    bool wait_pop(T& out, bool& is_open) {
+        bool success = false;
+        ChannelNode<T> * node = nullptr;
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            cv.wait(lock, [&]{ return first != nullptr || !open; });
             if (first != nullptr) {
                 node = first;
                 first = first->next;
@@ -239,7 +274,6 @@ private:
      * to track the assignment of another Transmitter to this
      * Channel.
      */
-    // increment the count of transmitters
     void add_transmitter() {
         const std::lock_guard<std::mutex> lock(tx_count_mutex);
         ++tx_count;
@@ -270,12 +304,14 @@ private:
             const std::lock_guard<std::mutex> lock(tx_count_mutex);
             --tx_count;
             if (tx_count == 0) {
+                cv.notify_all(); // nothing can ever be added to the queue again, so waiting threads should stop waiting
                 should_delete = close();
             }
         }
         return should_delete;
     }
 
+    std::condition_variable cv;
     std::mutex queue_mutex;
     std::mutex tx_count_mutex;
     ChannelNode<T> * first;
@@ -548,6 +584,27 @@ public:
      */
     bool try_receive(T& out, bool& is_open) {
         return channel->try_pop(out, is_open);
+    }
+
+    /**
+     * @brief Attempt to wait for an item in the target Channel.
+     *
+     * Checks the target Channel for an item and waits for it to gain one
+     * if the Channel is empty. Will move data from the Channel into the
+     * `out` parameter, record whether the Channel is still open in the
+     * `is_open` parameter, and return true when the Channel gains an item.
+     * Alternatively, if the Channel is closed before anything else is
+     * transmitted to it, will return false as the Receiver stops waiting.@n@n
+     *
+     * Will segfault if the Receiver has been closed, i.e. by moving
+     * out of it or by directly invoking its `close()` method.
+     *
+     * @param out Output parameter to contain the popped item
+     * @param is_open Output parameter indicating whether the target Channel is open
+     * @return whether `out` was modified
+     */
+    bool wait_receive(T& out, bool& is_open) {
+        return channel->wait_pop(out, is_open);
     }
 
     /**

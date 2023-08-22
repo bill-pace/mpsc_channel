@@ -1,7 +1,6 @@
 #include "channel.h"
 
 #include <iostream>
-#include <sstream>
 #include <thread>
 
 void send(Transmitter<size_t>, size_t, size_t);
@@ -80,8 +79,11 @@ void send(Transmitter<size_t> tx, size_t start, size_t stop) {
 
 void receive(Receiver<size_t> && rx, size_t * received) {
     bool channel_open { true };
+    size_t i;
+    if (rx.wait_receive(i, channel_open)) {
+        ++received[i];
+    }
     while (channel_open) {
-        size_t i;
         while (rx.try_receive(i, channel_open)) {
             ++received[i];
         }
