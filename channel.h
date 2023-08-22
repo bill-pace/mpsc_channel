@@ -160,7 +160,7 @@ private:
             first = new_node;
         }
         last = new_node;
-        cv.notify_one();
+        if (first == last) cv.notify_one(); // if queue wasn't empty, nothing should've been waiting
     }
 
     /**
