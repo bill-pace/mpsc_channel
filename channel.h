@@ -1,6 +1,7 @@
 #ifndef MPSCCHANNEL_CHANNEL_H
 #define MPSCCHANNEL_CHANNEL_H
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <utility>
@@ -57,11 +58,9 @@ private:
  * multiple Transmitters point to the same Channel there will be a
  * (benign) race condition on which one adds its item first.@n@n
  *
- * Thread safety is achieved through locking either of two mutexes,
- * depending on the operation being performed. One mutex protects
- * the queue and is locked for pushing and popping; the other
- * protects the count of live Transmitters and is locked when they
- * are created, destroyed, copied, or moved.@n@n
+ * Thread safety is achieved through either locking a mutex for
+ * pushing to/popping from the queue, or atomically tracking the
+ * number of live Transmitters.@n@n
  *
  * Channels take ownership of items pushed into them and relinquish
  * ownership of items popped out, and so cleanup should generally
@@ -106,7 +105,6 @@ private:
     Channel() :
             cv(),
             queue_mutex(),
-            tx_count_mutex(),
             first(nullptr),
             last(nullptr),
             tx_count(0),
@@ -270,21 +268,18 @@ private:
     /**
      * @brief Increments the Transmitter count.
      *
-     * Locks the `tx_count_mutex` and then increments `tx_count`
-     * to track the assignment of another Transmitter to this
-     * Channel.
+     * Atomically increments `tx_count` to track the assignment
+     * of another Transmitter to this Channel.
      */
     void add_transmitter() {
-        const std::lock_guard<std::mutex> lock(tx_count_mutex);
         ++tx_count;
     }
 
     /**
      * @brief Decrements the Transmitter count.
      *
-     * Locks the `tx_count_mutex` and then decrements `tx_count`
-     * to track the removal of a Transmitter from this Channel.
-     * @n@n
+     * Atomically decrements `tx_count` to track the removal
+     * of a Transmitter from this Channel.@n@n
      *
      * If the count reaches zero, then the caller is the last
      * Transmitter to this Channel and no more can be created.
@@ -301,9 +296,7 @@ private:
     bool remove_transmitter() {
         bool should_delete = false;
         {
-            const std::lock_guard<std::mutex> lock(tx_count_mutex);
-            --tx_count;
-            if (tx_count == 0) {
+            if (!(--tx_count)) {
                 cv.notify_all(); // nothing can ever be added to the queue again, so waiting threads should stop waiting
                 should_delete = close();
             }
@@ -313,10 +306,9 @@ private:
 
     std::condition_variable cv;
     std::mutex queue_mutex;
-    std::mutex tx_count_mutex;
     ChannelNode<T> * first;
     ChannelNode<T> * last;
-    size_t tx_count;
+    std::atomic_uint tx_count;
     bool open;
 };
 
@@ -368,15 +360,14 @@ public:
      * and invoke `add_transmitter()` on the referent, if not
      * null. Does no work if the `channel` pointers are equal
      * between the two Transmitter instances, as the count
-     * of active Transmitters wouldn't need to change in that
-     * case so there's no point in waiting for the mutex lock.
+     * of active Transmitters wouldn't need to change.
      *
      * @param other The Transmitter to copy
      * @return a reference to this Transmitter
      */
     Transmitter& operator=(const Transmitter & other) {
         if (&other == this) return *this;
-        if (other.channel == this->channel) return *this; // Transmitter count won't change so don't wait for the mutex
+        if (other.channel == this->channel) return *this;
         close();
         this->channel = other.channel;
         if(channel) channel->add_transmitter();
@@ -390,7 +381,7 @@ public:
      * before setting it to null on the moved Transmitter. As
      * moving a Transmitter doesn't change the count of valid
      * Transmitters to the target Channel, this constructor
-     * does not wait for the mutex lock.
+     * does not update the counter.
      *
      * @param other The Transmitter to move from
      */
@@ -403,9 +394,10 @@ public:
      *
      * Disconnects this Transmitter from its Channel, if any,
      * then moves the `channel` pointer from the `other`
-     * Transmitter. Waits for the mutex lock on its original
-     * Channel, but not on the new one as the count of live
-     * Transmitters to the new one doesn't need to change.
+     * Transmitter. Updates the Transmitter count on its
+     * original Channel, but not on the new one as the count
+     * of live Transmitters to the new one doesn't need to
+     * change.
      *
      * @param other
      * @return
