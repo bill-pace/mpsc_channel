@@ -80,11 +80,8 @@ void send(Transmitter<size_t> tx, size_t start, size_t stop) {
 void receive(Receiver<size_t> && rx, size_t * received) {
     bool channel_open { true };
     size_t i;
-    if (rx.wait_receive(i, channel_open)) {
-        ++received[i];
-    }
     while (channel_open) {
-        while (rx.try_receive(i, channel_open)) {
+        while (rx.wait_receive(i, channel_open)) {
             ++received[i];
         }
     }

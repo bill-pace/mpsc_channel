@@ -36,11 +36,8 @@ void send_task(const std::string & name, Transmitter<std::string> tx) {
 void receive_task(Receiver<std::string> && rx) {
     bool channel_open { true };
     string msg {};
-    if (rx.wait_receive(msg, channel_open)) {
-        cout << msg << endl;
-    }
     while (channel_open) {
-        while (rx.try_receive(msg, channel_open)) {
+        while (rx.wait_receive(msg, channel_open)) {
             cout << msg << endl;
         }
     }
