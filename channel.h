@@ -466,6 +466,15 @@ public:
         channel = nullptr;
     }
 
+    /**
+     * @brief Checks if the Transmitter is still open
+     *
+     * @return whether the Transmitter still has a target Channel
+     */
+    bool is_valid() {
+        return channel != nullptr;
+    }
+
 private:
     /**
      * @brief Construct a new Transmitter.
@@ -611,6 +620,15 @@ public:
         }
         channel = nullptr;
     }
+
+    /**
+     * @brief Checks if the Receiver is still open
+     *
+     * @return whether the Receiver still has a target Channel
+     */
+     bool is_valid() {
+         return channel != nullptr;
+     }
 
 private:
     /**
