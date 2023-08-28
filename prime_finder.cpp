@@ -1,3 +1,21 @@
+/**
+ * @brief Demo use of multiple Channels together
+ *
+ * This demo finds all prime numbers less than 1,000,000,
+ * sorts them into groups based on their last digit in
+ * hex representation, and writes each group to its own
+ * file in the working directory. The work of finding
+ * the primes and grouping them by digit is repeated
+ * across each of four threads, while a fifth monitors
+ * the Receivers for each group's Channel and writes
+ * lines to files as it finds lines to write.@n@n
+ *
+ * While the example is somewhat contrived, this demo
+ * still showcases how a Channel or a collection of
+ * Channels can synchronize access to one or more
+ * logging or output files.
+ */
+
 #include "channel.h"
 
 #include <fstream>
@@ -57,7 +75,7 @@ void find_primes(vector<Transmitter<string>> txs) {
             unsigned last_four_bits = candidate & 0xf;
             stringstream s {};
             s << "Thread " << this_thread::get_id() << " found prime number " << candidate
-              << " that ends with 0x" << hex << last_four_bits << dec << endl;
+              << " that ends with 0x" << hex << last_four_bits << dec;
             txs[last_four_bits].send(s.str());
 
             for (unsigned multiple = candidate * 2; multiple < num_primes; multiple += candidate) {
