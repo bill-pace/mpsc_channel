@@ -317,8 +317,10 @@ private:
  *
  * Transmitters provide the mechanism to add items to a Channel's queue.
  * As this is a multi-producer Channel, Transmitters may be either
- * copied or moved, though they may only be constructed through the
- * `open_channel<T>()` factory function.@n@n
+ * copied or moved. A new Transmitter may be default-constructed with
+ * no target Channel, but the only way to create a new Transmitter that
+ * points at a live Channel is with the `open_channel<T>()` factory
+ * function.@n@n
  *
  * When copied, moved, destroyed, or directed to close, a Transmitter
  * will notify the corresponding Channel instance(s) for the sake of
@@ -338,7 +340,10 @@ class Transmitter {
     friend std::pair<Transmitter<T>, Receiver<T>> open_channel<T>();
 
 public:
-    Transmitter() = delete;
+    /**
+     * Create a Transmitter with no target Channel.
+     */
+    Transmitter() : channel(nullptr) {};
 
     /**
      * @brief Copy construct a Transmitter.
@@ -500,7 +505,8 @@ private:
  * Receivers provide the mechanism for removing items from a Channel's
  * queue. As this is a single-consumer Channel, Receivers may be moved
  * or created through the `open_channel<T>()` factory function, but
- * they may not be copied.@n@n
+ * they may not be copied. Receivers may also be default-constructed
+ * with no target Channel.@n@n
  *
  * When moved, destroyed, or directed to close, a Receiver will first
  * close its target Channel, or destroy the Channel if it has already
@@ -519,7 +525,10 @@ class Receiver {
     friend std::pair<Transmitter<T>, Receiver<T>> open_channel<T>();
 
 public:
-    Receiver() = delete;
+    /**
+     * Create a Receiver with no target Channel.
+     */
+    Receiver() : channel(nullptr) {};
 
     Receiver(const Receiver &) = delete;
 

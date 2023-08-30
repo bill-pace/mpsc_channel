@@ -18,24 +18,26 @@
 
 #include "channel.h"
 
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <thread>
-#include <vector>
 
 using namespace std;
 
-void find_primes(vector<Transmitter<string>>);
-void write_primes(vector<Receiver<string>>);
+const int num_files = 16;
+
+void find_primes(array<Transmitter<string>, num_files>);
+void write_primes(array<Receiver<string>, num_files>);
 
 int main() {
-    vector<Transmitter<string>> txs;
-    vector<Receiver<string>> rxs;
-    for (unsigned i = 0; i < 16; ++i) {
+    array<Transmitter<string>, num_files> txs;
+    array<Receiver<string>, num_files> rxs;
+    for (unsigned i = 0; i < num_files; ++i) {
         auto tx_rx = open_channel<string>();
-        txs.emplace_back(std::move(tx_rx.first));
-        rxs.emplace_back(std::move(tx_rx.second));
+        txs[i] = std::move(tx_rx.first);
+        rxs[i] = std::move(tx_rx.second);
     }
 
     auto writer_thread = thread { write_primes, std::move(rxs) };
@@ -58,7 +60,7 @@ int main() {
     return 0;
 }
 
-void find_primes(vector<Transmitter<string>> txs) {
+void find_primes(array<Transmitter<string>, num_files> txs) {
     // 0 and 1 known not prime, 2 known prime, everything above 2 candidate
     const unsigned num_primes = 1000000;
     auto * possible_primes = new bool[num_primes];
@@ -87,9 +89,9 @@ void find_primes(vector<Transmitter<string>> txs) {
     delete [] possible_primes;
 }
 
-void write_primes(vector<Receiver<string>> rxs) {
-    ofstream outfiles[16];
-    for (unsigned i = 0; i < 16; ++i) {
+void write_primes(array<Receiver<string>, num_files> rxs) {
+    ofstream outfiles[num_files];
+    for (unsigned i = 0; i < num_files; ++i) {
         stringstream filename {};
         filename << "ends_with_" << i << ".primes";
         outfiles[i] = ofstream { filename.str() };
@@ -98,7 +100,7 @@ void write_primes(vector<Receiver<string>> rxs) {
     bool any_channel_open { true };
     while (any_channel_open) {
         any_channel_open = false;
-        for (unsigned i = 0; i < 16; ++i) {
+        for (unsigned i = 0; i < num_files; ++i) {
             auto & rx = rxs[i];
             if (rx.is_valid()) {
                 bool channel_open;
