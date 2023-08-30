@@ -125,14 +125,16 @@ private:
      */
     void push(T&& new_value) {
         auto * new_node = new ChannelNode { std::move(new_value) };
-        const std::lock_guard<std::mutex> lock(queue_mutex);
-        if (last) {
-            last->next = new_node;
-        } else {
-            first = new_node;
+        {
+            const std::lock_guard<std::mutex> lock(queue_mutex);
+            if (last) {
+                last->next = new_node;
+            } else {
+                first = new_node;
+            }
+            last = new_node;
         }
-        last = new_node;
-        if (first == last) cv.notify_one(); // if queue wasn't empty, nothing should've been waiting
+        cv.notify_one();
     }
 
     /**
@@ -269,10 +271,12 @@ private:
      */
     bool remove_transmitter() {
         bool should_delete = false;
-        {
-            if (!(--tx_count)) {
-                cv.notify_all(); // nothing can ever be added to the queue again, so waiting threads should stop waiting
-                should_delete = close();
+        if (!(--tx_count)) {
+            should_delete = close();
+            if (!should_delete) {
+                // Receiver is still live, so notify all threads waiting on it to either claim a value or stop
+                // waiting for something that can no longer be sent
+                cv.notify_all();
             }
         }
         return should_delete;
