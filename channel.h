@@ -6,47 +6,9 @@
 #include <mutex>
 #include <utility>
 
-template<typename T> class Channel;
 template<typename T> class Receiver;
 template<typename T> class Transmitter;
 template<typename T> std::pair<Transmitter<T>, Receiver<T>> open_channel();
-
-/**
- * @brief An item within a Channel's queue.
- *
- * A ChannelNode is a single piece of data in a singly linked list.
- * It has no public interface since instances should be managed entirely
- * through the Channel instance that owns them.
- *
- * @tparam T the type of data transferred through the owning Channel
- */
-template<typename T>
-struct ChannelNode {
-    friend Channel<T>;
-
-    ChannelNode() = delete;
-
-    ChannelNode(const ChannelNode &) = delete;
-
-    ChannelNode& operator=(const ChannelNode &) = delete;
-
-    ChannelNode(ChannelNode &&) = delete;
-
-    ChannelNode& operator=(ChannelNode &&) = delete;
-
-private:
-    /**
-     * @brief Construct a ChannelNode.
-     *
-     * Takes ownership of the `data` parameter.
-     *
-     * @param data An instance of the template type.
-     */
-    explicit ChannelNode(T && data) : data(data), next(nullptr) {}
-
-    T data;
-    ChannelNode* next;
-};
 
 /**
  * @brief A FIFO queue for transferring data between threads.
@@ -84,6 +46,18 @@ class Channel {
     friend Receiver<T>;
     friend std::pair<Transmitter<T>, Receiver<T>> open_channel<T>();
 
+    /**
+     * @brief Container for a single item
+     *
+     * This private struct serves as a node within the Channel's
+     * underlying singly linked list.
+     */
+    struct ChannelNode {
+        T data;
+        ChannelNode * next;
+        explicit ChannelNode(T && data) : data(std::move(data)), next(nullptr) {};
+    };
+
 public:
     Channel(const Channel&) = delete;
 
@@ -119,9 +93,9 @@ private:
      * other end of the Channel has already been closed.
      */
     ~Channel() {
-        ChannelNode<T> * next = first;
+        ChannelNode * next = first;
         while (next) {
-            ChannelNode<T> * following = next->next;
+            ChannelNode * following = next->next;
             delete next;
             next = following;
         }
@@ -150,7 +124,7 @@ private:
      * @param new_value The data to enqueue
      */
     void push(T&& new_value) {
-        auto * new_node = new ChannelNode<T> { std::move(new_value) };
+        auto * new_node = new ChannelNode { std::move(new_value) };
         const std::lock_guard<std::mutex> lock(queue_mutex);
         if (last) {
             last->next = new_node;
@@ -183,7 +157,7 @@ private:
      */
     bool try_pop(T& out, bool& is_open) {
         bool success = false;
-        ChannelNode<T> * node = nullptr;
+        ChannelNode * node = nullptr;
         {
             const std::lock_guard<std::mutex> lock(queue_mutex);
             if (first != nullptr) {
@@ -218,7 +192,7 @@ private:
      */
     bool wait_pop(T& out, bool& is_open) {
         bool success = false;
-        ChannelNode<T> * node = nullptr;
+        ChannelNode * node = nullptr;
         {
             std::unique_lock<std::mutex> lock(queue_mutex);
             cv.wait(lock, [&]{ return first != nullptr || !open; });
@@ -306,8 +280,8 @@ private:
 
     std::condition_variable cv;
     std::mutex queue_mutex;
-    ChannelNode<T> * first;
-    ChannelNode<T> * last;
+    ChannelNode * first;
+    ChannelNode * last;
     std::atomic_uint tx_count;
     bool open;
 };
