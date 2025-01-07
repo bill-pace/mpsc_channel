@@ -93,6 +93,7 @@ private:
      * other end of the Channel has already been closed.
      */
     ~Channel() {
+        std::lock_guard<std::mutex> lock(queue_mutex);
         ChannelNode * next = first;
         while (next) {
             ChannelNode * following = next->next;
@@ -125,15 +126,13 @@ private:
      */
     void push(T&& new_value) {
         auto * new_node = new ChannelNode { std::move(new_value) };
-        {
-            const std::lock_guard<std::mutex> lock(queue_mutex);
-            if (last) {
-                last->next = new_node;
-            } else {
-                first = new_node;
-            }
-            last = new_node;
+        const std::lock_guard<std::mutex> lock(queue_mutex);
+        if (last) {
+            last->next = new_node;
+        } else {
+            first = new_node;
         }
+        last = new_node;
         cv.notify_one();
     }
 
@@ -231,7 +230,6 @@ private:
      * @return whether the caller should invoke the Channel's destructor
      */
     bool close() {
-        const std::lock_guard<std::mutex> lock(queue_mutex);
         bool should_delete = false;
         if (open) {
             open = false;
@@ -272,12 +270,22 @@ private:
     bool remove_transmitter() {
         bool should_delete = false;
         if (!(--tx_count)) {
+            std::lock_guard<std::mutex> lock(queue_mutex);
             should_delete = close();
             if (!should_delete) {
                 // Receiver is still live, so notify all threads waiting on it to either claim a value or stop
                 // waiting for something that can no longer be sent
                 cv.notify_all();
             }
+        }
+        return should_delete;
+    }
+
+    bool remove_receiver() {
+        bool should_delete = false;
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            should_delete = close();
         }
         return should_delete;
     }
@@ -602,7 +610,7 @@ public:
      * already closed, deletes the Channel.
      */
     void close() {
-        if (channel && channel->close()) {
+        if (channel && channel->remove_receiver()) {
             delete channel;
         }
         channel = nullptr;
