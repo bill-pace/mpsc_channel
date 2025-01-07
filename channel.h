@@ -246,7 +246,9 @@ private:
      * of another Transmitter to this Channel.
      */
     void add_transmitter() {
-        ++tx_count;
+        // safe to use relaxed operations here because the queue_mutex
+        // will handle acquire/release ordering on the other data
+        tx_count.fetch_add(1, std::memory_order_relaxed);
     }
 
     /**
@@ -269,7 +271,12 @@ private:
      */
     bool remove_transmitter() {
         bool should_delete = false;
-        if (!(--tx_count)) {
+        // safe to use relaxed operations here because the queue_mutex will handle acquire/release ordering on the
+        // other data
+        unsigned transmitters_before_decrement = tx_count.fetch_sub(1, std::memory_order_relaxed);
+        // if 1 transmitter was left before the decrement, then we have just removed the last transmitter that
+        // could have sent any messages to this channel and should close it down
+        if (transmitters_before_decrement == 1) {
             std::lock_guard<std::mutex> lock(queue_mutex);
             should_delete = close();
             if (!should_delete) {
