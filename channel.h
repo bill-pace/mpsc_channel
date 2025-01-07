@@ -217,15 +217,17 @@ private:
     /**
      * @brief Direct the Channel to close.
      *
-     * Locks the `queue_mutex` to check whether the Channel is currently
-     * open. If so, marks the Channel as closed by setting `open` to false,
-     * then returns false to indicate that one half of the Channel still
-     * exists and the caller should not invalidate it by deleting the
-     * Channel.@n@n
+     * Checks whether the Channel is currently open. If so, marks the
+     * Channel as closed by setting `open` to false, then returns false
+     * to indicate that one half of the Channel still exists and the
+     * caller should not invalidate it by deleting the Channel.@n@n
      *
      * Otherwise, returns true to indicate to the caller that it is the
      * last owner of the Channel and that the Channel should now be
      * deleted to ensure it isn't leaked.
+     *
+     * Note that the Channel's `queue_mutex` must be locked when calling
+     * this function.
      *
      * @return whether the caller should invoke the Channel's destructor
      */
@@ -281,13 +283,24 @@ private:
             should_delete = close();
             if (!should_delete) {
                 // Receiver is still live, so notify all threads waiting on it to either claim a value or stop
-                // waiting for something that can no longer be sent
+                // waiting for something that can no longer be sent. Maintain the lock on queue_mutex through
+                // this call to ensure that the Receiver thread can't clean up the CV while it's still in use
+                // here (i.e. cause a use-after-free data race).
                 cv.notify_all();
             }
         }
         return should_delete;
     }
 
+    /**
+     * @brief Detaches the Receiver.
+     *
+     * Acquires a lock on `queue_mutex` and then calls `close`
+     * to determine whether the Channel should also be deleted.
+     * The result is returned to the calling Receiver.@n@n
+     *
+     * @return whether the destructor should be invoked next
+     */
     bool remove_receiver() {
         bool should_delete = false;
         {
