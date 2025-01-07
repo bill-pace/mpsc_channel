@@ -124,7 +124,7 @@ private:
      *
      * @param new_value The data to enqueue
      */
-    void push(T&& new_value) {
+    void push(T new_value) {
         auto * new_node = new ChannelNode { std::move(new_value) };
         const std::lock_guard<std::mutex> lock(queue_mutex);
         if (last) {
@@ -421,16 +421,16 @@ public:
     /**
      * @brief Transmit a value to the target Channel.
      *
-     * Moves data out of the parameter and into the target
-     * Channel via the Channel's `push()` method. This
-     * method will segfault if the Transmitter it was
-     * invoked on has been closed, i.e. by moving out of
-     * it or by directly invoking its `close()` method.
+     * Copies the parameter into the target Channel
+     * via the Channel's `push()` method. This method
+     * will segfault if the Transmitter it was invoked
+     * on has been closed, i.e. by moving out of it or
+     * by directly invoking its `close()` method.
      *
      * @param item The value to transmit
      */
-    void send(T & item) {
-        channel->push(std::move(item));
+    void send(const T & item) {
+        channel->push(item);
     }
 
     /**

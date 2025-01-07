@@ -40,7 +40,7 @@ int main() {
 
 void send_task(const string & name, Transmitter<string> tx) {
     string message { name + " says hello!" };
-    tx.send(message);
+    tx.send(std::move(message));
 }
 
 void receive_task(Receiver<string> && rx) {
